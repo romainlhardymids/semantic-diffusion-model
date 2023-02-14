@@ -39,6 +39,9 @@ class SteatosisSegmentationDataset(Dataset):
 
 def load_data(path, batch_size):
     df = pd.read_csv(path)
+    train_patients = [p for p in range(14)] + [p for p in range(18, 49)]
+    valid_patients = [p for p in range(55) if p not in train_patients]
+    print(f"train = {len(train_patients)}, valid = {len(valid_patients)}")
     dataset = SteatosisSegmentationDataset(df)
     loader = DataLoader(dataset, batch_size, shuffle=True, num_workers=4, drop_last=True)
     while True:
