@@ -1,3 +1,6 @@
+import cv2
+import pandas as pd
+
 import os
 import math
 import random
@@ -9,83 +12,116 @@ import numpy as np
 from torch.utils.data import DataLoader, Dataset
 
 
-def load_data(
-    *,
-    dataset_mode,
-    data_dir,
-    batch_size,
-    image_size,
-    class_cond=False,
-    deterministic=False,
-    random_crop=True,
-    random_flip=True,
-    is_train=True,
-):
-    """
-    For a dataset, create a generator over (images, kwargs) pairs.
+class SteatosisSegmentationDataset(Dataset):
+    """Dataset class for liver steatosis images."""
+    def __init__(self, df, n_labels=4):
+        self.df = df
+        self.n_labels = n_labels
+        self._length = len(df)
 
-    Each images is an NCHW float tensor, and the kwargs dict contains zero or
-    more keys, each of which map to a batched Tensor of their own.
-    The kwargs dict can be used for class labels, in which case the key is "y"
-    and the values are integer tensors of class labels.
+    def __len__(self):
+        return self._length
 
-    :param data_dir: a dataset directory.
-    :param batch_size: the batch size of each returned pair.
-    :param image_size: the size to which images are resized.
-    :param class_cond: if True, include a "y" key in returned dicts for class
-                       label. If classes are not available and this is true, an
-                       exception will be raised.
-    :param deterministic: if True, yield results in a deterministic order.
-    :param random_crop: if True, randomly crop the images for augmentation.
-    :param random_flip: if True, randomly flip the images for augmentation.
-    """
-    if not data_dir:
-        raise ValueError("unspecified data directory")
+    def __getitem__(self, i):
+        row = self.df.iloc[i]
+        image_path = row["image_path"]
+        segmentation_path = row["segmentation_path"]
+        label = row["label"]
+        img = cv2.imread(image_path, cv2.IMREAD_ANYDEPTH).astype(np.uint8)
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        seg = cv2.imread(segmentation_path, cv2.IMREAD_ANYDEPTH).astype(np.uint8)
+        sample = {
+            "image": (img / 127.5 - 1.0).astype(np.float32),
+            "segmentation": np.eye(self.n_labels)[seg]
+        }
+        return sample
 
-    if dataset_mode == 'cityscapes':
-        all_files = _list_image_files_recursively(os.path.join(data_dir, 'leftImg8bit', 'train' if is_train else 'val'))
-        labels_file = _list_image_files_recursively(os.path.join(data_dir, 'gtFine', 'train' if is_train else 'val'))
-        classes = [x for x in labels_file if x.endswith('_labelIds.png')]
-        instances = [x for x in labels_file if x.endswith('_instanceIds.png')]
-    elif dataset_mode == 'ade20k':
-        all_files = _list_image_files_recursively(os.path.join(data_dir, 'images', 'training' if is_train else 'validation'))
-        classes = _list_image_files_recursively(os.path.join(data_dir, 'annotations', 'training' if is_train else 'validation'))
-        instances = None
-    elif dataset_mode == 'celeba':
-        # The edge is computed by the instances.
-        # However, the edge get from the labels and the instances are the same on CelebA.
-        # You can take either as instance input
-        all_files = _list_image_files_recursively(os.path.join(data_dir, 'train' if is_train else 'test', 'images'))
-        classes = _list_image_files_recursively(os.path.join(data_dir, 'train' if is_train else 'test', 'labels'))
-        instances = _list_image_files_recursively(os.path.join(data_dir, 'train' if is_train else 'test', 'labels'))
-    else:
-        raise NotImplementedError('{} not implemented'.format(dataset_mode))
 
-    print("Len of Dataset:", len(all_files))
-
-    dataset = ImageDataset(
-        dataset_mode,
-        image_size,
-        all_files,
-        classes=classes,
-        instances=instances,
-        shard=MPI.COMM_WORLD.Get_rank(),
-        num_shards=MPI.COMM_WORLD.Get_size(),
-        random_crop=random_crop,
-        random_flip=random_flip,
-        is_train=is_train
-    )
-
-    if deterministic:
-        loader = DataLoader(
-            dataset, batch_size=batch_size, shuffle=False, num_workers=1, drop_last=True
-        )
-    else:
-        loader = DataLoader(
-            dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True
-        )
+def load_data(path, batch_size):
+    df = pd.read_csv(path)
+    dataset = SteatosisSegmentationDataset(df)
+    loader = DataLoader(dataset, batch_size, shuffle=True, num_workers=4, drop_last=True)
     while True:
         yield from loader
+
+
+# def load_data(
+#     *,
+#     dataset_mode,
+#     data_dir,
+#     batch_size,
+#     image_size,
+#     class_cond=False,
+#     deterministic=False,
+#     random_crop=True,
+#     random_flip=True,
+#     is_train=True,
+# ):
+#     """
+#     For a dataset, create a generator over (images, kwargs) pairs.
+
+#     Each images is an NCHW float tensor, and the kwargs dict contains zero or
+#     more keys, each of which map to a batched Tensor of their own.
+#     The kwargs dict can be used for class labels, in which case the key is "y"
+#     and the values are integer tensors of class labels.
+
+#     :param data_dir: a dataset directory.
+#     :param batch_size: the batch size of each returned pair.
+#     :param image_size: the size to which images are resized.
+#     :param class_cond: if True, include a "y" key in returned dicts for class
+#                        label. If classes are not available and this is true, an
+#                        exception will be raised.
+#     :param deterministic: if True, yield results in a deterministic order.
+#     :param random_crop: if True, randomly crop the images for augmentation.
+#     :param random_flip: if True, randomly flip the images for augmentation.
+#     """
+#     if not data_dir:
+#         raise ValueError("unspecified data directory")
+
+#     if dataset_mode == 'cityscapes':
+#         all_files = _list_image_files_recursively(os.path.join(data_dir, 'leftImg8bit', 'train' if is_train else 'val'))
+#         labels_file = _list_image_files_recursively(os.path.join(data_dir, 'gtFine', 'train' if is_train else 'val'))
+#         classes = [x for x in labels_file if x.endswith('_labelIds.png')]
+#         instances = [x for x in labels_file if x.endswith('_instanceIds.png')]
+#     elif dataset_mode == 'ade20k':
+#         all_files = _list_image_files_recursively(os.path.join(data_dir, 'images', 'training' if is_train else 'validation'))
+#         classes = _list_image_files_recursively(os.path.join(data_dir, 'annotations', 'training' if is_train else 'validation'))
+#         instances = None
+#     elif dataset_mode == 'celeba':
+#         # The edge is computed by the instances.
+#         # However, the edge get from the labels and the instances are the same on CelebA.
+#         # You can take either as instance input
+#         all_files = _list_image_files_recursively(os.path.join(data_dir, 'train' if is_train else 'test', 'images'))
+#         classes = _list_image_files_recursively(os.path.join(data_dir, 'train' if is_train else 'test', 'labels'))
+#         instances = _list_image_files_recursively(os.path.join(data_dir, 'train' if is_train else 'test', 'labels'))
+#     else:
+#         raise NotImplementedError('{} not implemented'.format(dataset_mode))
+
+#     print("Len of Dataset:", len(all_files))
+
+#     dataset = ImageDataset(
+#         dataset_mode,
+#         image_size,
+#         all_files,
+#         classes=classes,
+#         instances=instances,
+#         shard=MPI.COMM_WORLD.Get_rank(),
+#         num_shards=MPI.COMM_WORLD.Get_size(),
+#         random_crop=random_crop,
+#         random_flip=random_flip,
+#         is_train=is_train
+#     )
+
+#     if deterministic:
+#         loader = DataLoader(
+#             dataset, batch_size=batch_size, shuffle=False, num_workers=1, drop_last=True
+#         )
+#     else:
+#         loader = DataLoader(
+#             dataset, batch_size=batch_size, shuffle=True, num_workers=1, drop_last=True
+#         )
+#     while True:
+#         yield from loader
 
 
 def _list_image_files_recursively(data_dir):

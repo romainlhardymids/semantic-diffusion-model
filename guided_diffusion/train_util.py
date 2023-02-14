@@ -1,6 +1,7 @@
 import copy
 import functools
 import os
+from einops import rearrange
 
 import blobfile as bf
 import torch as th
@@ -162,9 +163,10 @@ class TrainLoop:
             not self.lr_anneal_steps
             or self.step + self.resume_step < self.lr_anneal_steps
         ):
-            batch, cond = next(self.data)
-            cond = self.preprocess_input(cond)
-            self.run_step(batch, cond)
+            batch = next(self.data)
+            imgs = rearrange(batch["image"], "b h w c -> b c h w")
+            cond = self.preprocess_input(batch)
+            self.run_step(imgs, cond)
             if self.step % self.log_interval == 0:
                 logger.dumpkvs()
             if self.step % self.save_interval == 0:
@@ -264,27 +266,28 @@ class TrainLoop:
 
     def preprocess_input(self, data):
         # move to GPU and change data types
-        data['label'] = data['label'].long()
+        # data['label'] = data['label'].long()
 
-        # create one-hot label map
-        label_map = data['label']
-        bs, _, h, w = label_map.size()
-        nc = self.num_classes
-        input_label = th.FloatTensor(bs, nc, h, w).zero_()
-        input_semantics = input_label.scatter_(1, label_map, 1.0)
+        # # create one-hot label map
+        # label_map = data['label']
+        # bs, _, h, w = label_map.size()
+        # nc = self.num_classes
+        # input_label = th.FloatTensor(bs, nc, h, w).zero_()
+        # input_semantics = input_label.scatter_(1, label_map, 1.0)
+        input_semantics = rearrange(data["segmentation"], "b h w c -> b c h w")
 
-        # concatenate instance map if it exists
-        if 'instance' in data:
-            inst_map = data['instance']
-            instance_edge_map = self.get_edges(inst_map)
-            input_semantics = th.cat((input_semantics, instance_edge_map), dim=1)
+        # # concatenate instance map if it exists
+        # if 'instance' in data:
+        #     inst_map = data['instance']
+        #     instance_edge_map = self.get_edges(inst_map)
+        #     input_semantics = th.cat((input_semantics, instance_edge_map), dim=1)
 
         if self.drop_rate > 0.0:
             mask = (th.rand([input_semantics.shape[0], 1, 1, 1]) > self.drop_rate).float()
             input_semantics = input_semantics * mask
 
         cond = {key: value for key, value in data.items() if key not in ['label', 'instance', 'path', 'label_ori']}
-        cond['y'] = input_semantics
+        cond["y"] = input_semantics
 
         return cond
 
